@@ -10,8 +10,10 @@ from PyQt6.QtGui import QShortcut, QKeySequence
 
 
 class Canvas(QLabel):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, main_window):
+        super().__init__(main_window)
+        self.main_window = main_window  # ← сохраняем ссылку на MainWindow
+
         self.history = []
         self.future = []
 
@@ -47,38 +49,48 @@ class Canvas(QLabel):
         self.pen_color = QColor(c)
 
     def fill_color(self, color, pos):
-        img = self.pixmap().toImage()
-        target_color = img.pixelColor(pos)
-
-        if target_color == color:
+        pixmap = self.pixmap()
+        if pixmap is None:
+            print("❌ Нет pixmap!")
             return
 
-        painter = QPainter(self.pixmap())
-        painter.setPen(QPen(color))
-        painter.setBrush(color)
+        img = QImage(pixmap.toImage())
+        if not QRect(0, 0, img.width(), img.height()).contains(pos):
+            print(f"❌ Позиция вне изображения: {pos}")
+            return
 
-        if target_color != QColor("white"):
-            stack = [pos]
-            checked = set()
-            while stack:
-                x, y = stack.pop()
-                if (x, y) in checked:
-                    continue
-                checked.add((x, y))
-                if img.pixelColor(x, y) == target_color:
-                    painter.drawPoint(x, y)
-                    stack.extend([(x + dx, y + dy) for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)] if
-                                  0 <= x + dx < img.width() and 0 <= y + dy < img.height()])
-        else:
-            painter.fillRect(self.rect(), color)
+        target_color = img.pixelColor(pos)
+        if target_color.rgba() == color.rgba():
+            print("🎨 Цвет совпадает, заливка не нужна")
+            return
+
+        painter = QPainter(pixmap)
+        painter.setPen(QPen(color))
+
+        stack = [(pos.x(), pos.y())]
+        checked = set()
+
+        while stack:
+            x, y = stack.pop()
+            if (x, y) in checked:
+                continue
+            checked.add((x, y))
+
+            if img.pixelColor(x, y).rgba() == target_color.rgba():
+                painter.drawPoint(x, y)
+                for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                    nx, ny = x + dx, y + dy
+                    if 0 <= nx < img.width() and 0 <= ny < img.height():
+                        stack.append((nx, ny))
 
         painter.end()
-        self.setPixmap(self.pixmap())
+        self.setPixmap(pixmap)
         self.save_state()
 
     def clear(self):
-        self.pixmap().fill(Qt.GlobalColor.white)
-        self.setPixmap(self.pixmap())
+        new_pixmap = QPixmap(self.width(), self.height())
+        new_pixmap.fill(Qt.GlobalColor.white)
+        self.setPixmap(new_pixmap)
         self.save_state()
 
     def mouseMoveEvent(self, e) -> None:
@@ -90,29 +102,41 @@ class Canvas(QLabel):
             painter = QPainter(canvas)
             p = painter.pen()
             p.setWidth(self.pen_size)
-            if self.eraser:
-                p.setColor(QColor("#FFFFFF"))
-            else:
-                p.setColor(self.pen_color)
+            p.setColor(QColor("#FFFFFF") if self.eraser else self.pen_color)
             painter.setPen(p)
             painter.drawLine(int(self.last_x),
                              int(self.last_y),
                              int(e.position().x()),
-                             int(e.position().y())
-                             )
+                             int(e.position().y()))
             painter.end()
             self.setPixmap(canvas)
             self.last_x = e.position().x()
             self.last_y = e.position().y()
 
     def mouseReleaseEvent(self, e) -> None:
+        pos = e.position().toPoint()
+
         if self.tool == "can":
-            self.fill_color(self.pen_color)
-            self.last_x, self.last_y = None, None
+            self.fill_color(self.pen_color, pos)
+
+        elif self.tool == "picker":
+            img = self.pixmap().toImage()
+            if QRect(0, 0, img.width(), img.height()).contains(pos):
+                picked_color = img.pixelColor(pos)
+                hex_color = picked_color.name()
+
+                self.main_window.set_current_color(hex_color)
+                self.set_pen_color(hex_color)
+                self.main_window.canvas.set_pen_color(hex_color)
+
+                self.main_window.pen_pressed()
+
+
         else:
-            self.last_x = None
-            self.last_y = None
             self.save_state()
+
+        self.last_x, self.last_y = None, None
+
 
 COLORS = [
    '#000000', '#333333', '#666666', '#999999', '#ffffff', '#ff0000', '#ff4500',
@@ -153,7 +177,7 @@ class MainWindow(QMainWindow):
         open_action.triggered.connect(self.open_file)
         save_action.triggered.connect(self.save_img)
 
-        self.canvas = Canvas()
+        self.canvas = Canvas(self)
         w = QWidget()
         l = QVBoxLayout()
         w.setLayout(l)
@@ -227,6 +251,12 @@ class MainWindow(QMainWindow):
         self.eraserButton.setCheckable(True)
         self.drawingToolbar.addWidget(self.eraserButton)
 
+        self.pickerButton = QPushButton()
+        self.pickerButton.setIcon(QIcon('icons/pipette.png'))
+        self.pickerButton.setCheckable(True)
+        self.drawingToolbar.addWidget(self.pickerButton)
+        self.pickerButton.clicked.connect(self.picker_pressed)
+
 
         # Кнопки управления файлами
         self.newFileButton = QPushButton()
@@ -262,6 +292,7 @@ class MainWindow(QMainWindow):
         new_shortcut.activated.connect(self.new_img)
 
         self.all_buttons = [self.canButton, self.brushButton, self.eraserButton]
+        self.all_buttons.append(self.pickerButton)
 
     def set_current_color(self, c):
         self.current_color = c
@@ -277,7 +308,7 @@ class MainWindow(QMainWindow):
         for color in COLORS:
             b = QPalletteButton(color)
             b.pressed.connect(lambda c=color: self.set_current_color(c))
-            b.pressed.connect(lambda c=color: self.canvas.set_pen_color(self.current_color))
+            b.pressed.connect(lambda c=color: self.canvas.set_pen_color(c))
             layout.addWidget(b)
 
     def change_pen_size(self, s):
@@ -340,6 +371,11 @@ class MainWindow(QMainWindow):
     def copy_to_clipboard(self):
         clipboard = QApplication.clipboard()
         clipboard.setPixmap(self.canvas.pixmap())
+
+    def picker_pressed(self):
+        self.release_buttons(self.pickerButton)
+        self.canvas.tool = "picker"
+
 
 app = QApplication(sys.argv)
 app.setWindowIcon(QIcon('icons/pallete.png'))
