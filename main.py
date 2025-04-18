@@ -1,5 +1,6 @@
 import sys
-
+import math
+from PyQt6.QtWidgets import QComboBox
 from PyQt6 import QtWidgets, QtCore
 from PyQt6.QtCore import QSize, Qt, QRect, QPoint
 from PyQt6.QtGui import QIcon, QAction, QColor, QPixmap, QPainter, QImage, QPen
@@ -118,6 +119,49 @@ class Canvas(QLabel):
 
         if self.tool == "can":
             self.fill_color(self.pen_color, pos)
+
+        elif self.tool in ["square", "circle", "line", "arrow"]:
+            canvas = self.pixmap()
+            painter = QPainter(canvas)
+            p = painter.pen()
+            p.setWidth(self.pen_size)
+            p.setColor(self.pen_color)
+            painter.setPen(p)
+
+            start = QPoint(int(self.last_x), int(self.last_y))
+            end = e.position().toPoint()
+
+            rect = QRect(start, end).normalized()
+
+            if self.tool == "square":
+                painter.drawRect(rect)
+            elif self.tool == "circle":
+                painter.drawEllipse(rect)
+            elif self.tool == "line":
+                painter.drawLine(start, end)
+            elif self.tool == "arrow":
+                # Рисуем основную линию стрелки
+                painter.drawLine(start, end)
+
+                # Рисуем наконечник стрелки
+                angle = math.atan2(start.y() - end.y(), start.x() - end.x())
+                arrow_size = 15  # Размер наконечника
+
+                arrow_p1 = QPoint(
+                    int(end.x() + arrow_size * math.cos(angle + math.pi / 6)),
+                    int(end.y() + arrow_size * math.sin(angle + math.pi / 6))
+                )
+                arrow_p2 = QPoint(
+                    int(end.x() + arrow_size * math.cos(angle - math.pi / 6)),
+                    int(end.y() + arrow_size * math.sin(angle - math.pi / 6))
+                )
+
+                painter.drawLine(end, arrow_p1)
+                painter.drawLine(end, arrow_p2)
+
+            painter.end()
+            self.setPixmap(canvas)
+            self.save_state()
 
         elif self.tool == "picker":
             img = self.pixmap().toImage()
@@ -257,6 +301,21 @@ class MainWindow(QMainWindow):
         self.drawingToolbar.addWidget(self.pickerButton)
         self.pickerButton.clicked.connect(self.picker_pressed)
 
+        # ---Выпадающий список фигур---
+        self.shapeComboBox = QComboBox()
+        self.shapeComboBox.addItem("Нет")
+        self.shapeComboBox.addItem("Квадрат")
+        self.shapeComboBox.addItem("Круг")
+        self.shapeComboBox.addItem("Линия")
+        self.shapeComboBox.addItem("Стрелка")
+
+        self.drawingToolbar.addWidget(self.shapeComboBox)
+
+        # Подключаем обработку выбора
+        self.shapeComboBox.currentIndexChanged.connect(self.shape_selected)
+
+
+
 
         # Кнопки управления файлами
         self.newFileButton = QPushButton()
@@ -302,7 +361,8 @@ class MainWindow(QMainWindow):
             self.canvas.eraser = False
         for b in self.all_buttons:
             b.setChecked(False)
-        btn.setChecked(True)
+        if btn is not None:
+            btn.setChecked(True)
 
     def add_palette_buttons(self, layout):
         for color in COLORS:
@@ -375,6 +435,13 @@ class MainWindow(QMainWindow):
     def picker_pressed(self):
         self.release_buttons(self.pickerButton)
         self.canvas.tool = "picker"
+
+    def shape_selected(self, index):
+        shapes = ["none", "square", "circle", "line", "arrow"]
+        selected_shape = shapes[index]
+        self.canvas.tool = selected_shape
+        self.release_buttons(None)  # Отжать все кнопки
+        print(f"Выбрана фигура: {selected_shape}")
 
 
 app = QApplication(sys.argv)
