@@ -3,9 +3,9 @@ import math
 from PyQt6.QtWidgets import QComboBox
 from PyQt6 import QtWidgets, QtCore
 from PyQt6.QtCore import QSize, Qt, QRect, QPoint
-from PyQt6.QtGui import QIcon, QAction, QColor, QPixmap, QPainter, QImage, QPen, QShortcut, QKeySequence
+from PyQt6.QtGui import QIcon, QAction, QColor, QPixmap, QPainter, QImage, QPen, QShortcut, QKeySequence, QFontDatabase
 from PyQt6.QtWidgets import QApplication, QMainWindow, QPushButton, QLabel, \
-   QGraphicsColorizeEffect, QToolBar, QSlider, QWidget, QVBoxLayout, QHBoxLayout, QFileDialog
+   QGraphicsColorizeEffect, QToolBar, QSlider, QWidget, QVBoxLayout, QHBoxLayout, QFileDialog, QColorDialog
 
 
 class Canvas(QLabel):
@@ -212,6 +212,20 @@ class Canvas(QLabel):
 
                 self.main_window.pen_pressed()
 
+        elif self.tool == "text":
+            text, ok = QtWidgets.QInputDialog.getText(self, "Введите текст", "Текст:")
+            if ok and text:
+                canvas = self.pixmap()
+                painter = QPainter(canvas)
+                painter.setPen(QPen(self.pen_color))
+                font = painter.font()
+                font.setFamily(self.main_window.fontComboBox.currentFont().family())
+                font.setPointSize(int(self.main_window.fontSizeComboBox.currentText()))
+                painter.setFont(font)
+                painter.drawText(pos, text)
+                painter.end()
+                self.setPixmap(canvas)
+                self.save_state()
 
         else:
             self.save_state()
@@ -219,22 +233,6 @@ class Canvas(QLabel):
         self.last_x, self.last_y = None, None
         self.temp_end_point = None
         self.update()
-
-COLORS = [
-   '#000000', '#333333', '#666666', '#999999', '#ffffff', '#ff0000', '#ff4500',
-   '#ff8c00', '#ffa500', '#ffd700', '#ffff00', '#9acd32', '#32cd32', '#008000',
-   '#006400', '#00ced1', '#4682b4', '#0000ff', '#4b0082', '#8a2be2', '#9400d3',
-   '#c71585', '#ff1493', '#ff69b4', '#ffc0cb', '#a52a2a', '#8b4513', '#d2691e',
-   '#f4a460', '#deb887',
-]
-
-
-class QPalletteButton(QPushButton):
-    def __init__(self, color):
-        super().__init__()
-        self.setFixedSize(QSize(24, 24))
-        self.color = color
-        self.setStyleSheet('background-color: %s' % color)
 
 
 class MainWindow(QMainWindow):
@@ -270,7 +268,10 @@ class MainWindow(QMainWindow):
         self.current_color = "#000000"
 
         palette = QHBoxLayout()
-        self.add_palette_buttons(palette)
+        color_picker_btn = QPushButton("Выбрать цвет")
+        color_picker_btn.setFixedSize(120, 30)
+        color_picker_btn.clicked.connect(self.open_color_picker)
+        palette.addWidget(color_picker_btn)
         l.addLayout(palette)
 
         # Панели инструментов
@@ -303,8 +304,6 @@ class MainWindow(QMainWindow):
         self.drawingToolbar.setIconSize(QSize(16, 16))
         self.drawingToolbar.setObjectName('drawingToolBar')
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.drawingToolbar)
-
-
 
         # Ползунок для изменения размера текста
         sizeicon = QLabel()
@@ -339,6 +338,24 @@ class MainWindow(QMainWindow):
         self.drawingToolbar.addWidget(self.pickerButton)
         self.pickerButton.clicked.connect(self.picker_pressed)
 
+        self.fontComboBox = QtWidgets.QFontComboBox()
+        self.fontComboBox.setFixedWidth(150)
+        self.drawingToolbar.addWidget(self.fontComboBox)
+
+        self.fontSizeComboBox = QtWidgets.QComboBox()
+        self.fontSizeComboBox.setFixedWidth(50)
+        self.fontSizeComboBox.addItems([str(s) for s in range(8, 33, 2)])
+        self.fontSizeComboBox.setCurrentText("16")
+        self.drawingToolbar.addWidget(self.fontSizeComboBox)
+
+
+        self.textButton = QPushButton()
+        self.textButton.setIcon(QIcon('icons/text.png'))
+        self.textButton.setCheckable(True)
+        self.drawingToolbar.addWidget(self.textButton)
+
+        self.textButton.clicked.connect(self.text_pressed)
+
         # ---Выпадающий список фигур---
         self.shapeComboBox = QComboBox()
         self.shapeComboBox.addItem(QIcon("icons/none.png"), "Нет")
@@ -351,9 +368,6 @@ class MainWindow(QMainWindow):
 
         # Подключаем обработку выбора
         self.shapeComboBox.currentIndexChanged.connect(self.shape_selected)
-
-
-
 
         # Кнопки управления файлами
         self.newFileButton = QPushButton()
@@ -390,6 +404,7 @@ class MainWindow(QMainWindow):
 
         self.all_buttons = [self.canButton, self.brushButton, self.eraserButton]
         self.all_buttons.append(self.pickerButton)
+        self.all_buttons.append(self.textButton)
 
     def set_current_color(self, c):
         self.current_color = c
@@ -402,12 +417,10 @@ class MainWindow(QMainWindow):
         if btn is not None:
             btn.setChecked(True)
 
-    def add_palette_buttons(self, layout):
-        for color in COLORS:
-            b = QPalletteButton(color)
-            b.pressed.connect(lambda c=color: self.set_current_color(c))
-            b.pressed.connect(lambda c=color: self.canvas.set_pen_color(c))
-            layout.addWidget(b)
+    def open_color_picker(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            self.canvas.set_pen_color(color)
 
     def change_pen_size(self, s):
         self.canvas.pen_size = s
@@ -478,8 +491,12 @@ class MainWindow(QMainWindow):
         shapes = ["none", "square", "circle", "line", "arrow"]
         selected_shape = shapes[index]
         self.canvas.tool = selected_shape
-        self.release_buttons(None)  # Отжать все кнопки
+        self.release_buttons(None)
         print(f"Выбрана фигура: {selected_shape}")
+
+    def text_pressed(self):
+        self.release_buttons(self.textButton)
+        self.canvas.tool = "text"
 
 
 app = QApplication(sys.argv)
